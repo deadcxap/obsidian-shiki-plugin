@@ -29,7 +29,10 @@ interface CustomTheme {
 }
 
 // some languages break obsidian's `registerMarkdownCodeBlockProcessor`, so we blacklist them
-const languageNameBlacklist = new Set(['c++', 'c#', 'f#', 'mermaid']);
+const LANGUAGE_BLACKLIST = new Set(['c++', 'c#', 'f#', 'mermaid']);
+
+// some languages are considered "special" by shiki.isSpecialLang
+const LANGUAGE_SPECIAL = new Set(['plaintext', 'txt', 'text', 'plain', 'ansi']);
 
 export class CodeHighlighter {
 	plugin: ShikiPlugin;
@@ -54,7 +57,7 @@ export class CodeHighlighter {
 		await this.loadEC();
 		await this.loadShiki();
 
-		this.supportedLanguages = [...Object.keys(bundledLanguages), ...this.customLanguages.map(i => i.name)];
+		this.supportedLanguages = [...Object.keys(bundledLanguages), ...LANGUAGE_SPECIAL, ...this.customLanguages.map(i => i.name)];
 	}
 
 	async unload(): Promise<void> {
@@ -92,6 +95,7 @@ export class CodeHighlighter {
 	}
 
 	async loadCustomThemes(): Promise<void> {
+		const activeTheme = this.themeMapper.getThemeIdentifier();
 		this.customThemes = [];
 
 		// custom themes are disabled unless users specify a folder for them in plugin settings
@@ -127,9 +131,15 @@ export class CodeHighlighter {
 		}
 
 		// if the user's set theme cannot be loaded (e.g. it was deleted), fall back to default theme
-		if (this.usesCustomTheme() && !this.customThemes.find(theme => theme.name === this.plugin.loadedSettings.theme)) {
-			this.plugin.settings.theme = DEFAULT_SETTINGS.theme;
-			this.plugin.loadedSettings.theme = DEFAULT_SETTINGS.theme;
+		if (this.themeMapper.usingCustomTheme() && !this.customThemes.find(theme => theme.name === activeTheme)) {
+			// ony reset the theme that's currently broken
+			if (activeTheme == this.plugin.loadedSettings.darkTheme) {
+				this.plugin.settings.darkTheme = DEFAULT_SETTINGS.darkTheme;
+				this.plugin.loadedSettings.darkTheme = DEFAULT_SETTINGS.darkTheme;
+			} else if (activeTheme == this.plugin.loadedSettings.lightTheme) {
+				this.plugin.settings.lightTheme = DEFAULT_SETTINGS.lightTheme;
+				this.plugin.loadedSettings.lightTheme = DEFAULT_SETTINGS.lightTheme;
+			}
 
 			await this.plugin.saveSettings();
 		}
@@ -138,6 +148,8 @@ export class CodeHighlighter {
 	}
 
 	async loadEC(): Promise<void> {
+		const useThemeColors = this.plugin.loadedSettings.preferThemeColors && !this.themeMapper.usingObsidianTheme();
+
 		this.ec = new ExpressiveCodeEngine({
 			themes: [new ExpressiveCodeTheme(await this.themeMapper.getThemeForEC())],
 			plugins: [
@@ -149,11 +161,13 @@ export class CodeHighlighter {
 				pluginLineNumbers(),
 				pluginFrames(),
 			],
-			styleOverrides: getECTheme(this.plugin.loadedSettings),
+			styleOverrides: getECTheme(useThemeColors),
 			minSyntaxHighlightingColorContrast: 0,
 			themeCssRoot: 'div.expressive-code',
 			defaultProps: {
-				showLineNumbers: false,
+				showLineNumbers: this.plugin.loadedSettings.ecDefaultShowLineNumbers,
+				wrap: this.plugin.loadedSettings.ecDefaultWrap,
+				frame: this.plugin.loadedSettings.ecDefaultFrame,
 			},
 		});
 
@@ -182,16 +196,11 @@ export class CodeHighlighter {
 		});
 	}
 
-	usesCustomTheme(): boolean {
-		return this.plugin.loadedSettings.theme.endsWith('.json');
-	}
-
 	/**
 	 * All languages that are safe to use with Obsidian's `registerMarkdownCodeBlockProcessor`.
 	 */
 	obsidianSafeLanguageNames(): string[] {
-		return this.supportedLanguages.filter(lang => !languageNameBlacklist.has(lang) && !this.plugin.loadedSettings.disabledLanguages.includes(lang));
-		// .concat(this.customLanguages.map(lang => lang.name));
+		return this.supportedLanguages.filter(lang => !LANGUAGE_BLACKLIST.has(lang) && !this.plugin.loadedSettings.disabledLanguages.includes(lang));
 	}
 
 	/**
@@ -217,8 +226,14 @@ export class CodeHighlighter {
 		}
 		return this.shiki.codeToTokens(code, {
 			lang: lang as BundledLanguage,
-			theme: this.plugin.settings.theme,
+			theme: this.themeMapper.getThemeIdentifier(),
 		});
+	}
+
+	renderTokens(tokens: ThemedToken[], parent: HTMLElement): void {
+		for (const token of tokens) {
+			this.tokenToSpan(token, parent);
+		}
 	}
 
 	tokenToSpan(token: ThemedToken, parent: HTMLElement): void {

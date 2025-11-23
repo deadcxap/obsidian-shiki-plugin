@@ -5,12 +5,13 @@ import { DEFAULT_SETTINGS, type Settings } from 'src/settings/Settings';
 import { ShikiSettingsTab } from 'src/settings/SettingsTab';
 import { filterHighlightAllPlugin } from 'src/PrismPlugin';
 import { CodeHighlighter } from 'src/Highlighter';
+import { InlineCodeBlock } from 'src/InlineCodeBlock';
 
 export const SHIKI_INLINE_REGEX = /^\{([^\s]+)\} (.*)/i; // format: `{lang} code`
 
 export default class ShikiPlugin extends Plugin {
 	highlighter!: CodeHighlighter;
-	activeCodeBlocks!: Map<string, CodeBlock[]>;
+	activeCodeBlocks!: Map<string, (CodeBlock | InlineCodeBlock)[]>;
 	settings!: Settings;
 	loadedSettings!: Settings;
 	updateCm6Plugin!: () => Promise<void>;
@@ -49,6 +50,20 @@ export default class ShikiPlugin extends Plugin {
 			}),
 		);
 
+		this.registerEvent(
+			this.app.workspace.on('css-change', () => {
+				void this.reloadHighlighter();
+			}),
+		);
+
+		this.addCommand({
+			id: 'reload-highlighter',
+			name: 'Reload highlighter',
+			callback: () => {
+				void this.reloadHighlighter();
+			},
+		});
+
 		await this.registerPrismPlugin();
 	}
 
@@ -86,20 +101,9 @@ export default class ShikiPlugin extends Plugin {
 				this.registerMarkdownCodeBlockProcessor(
 					language,
 					async (source, el, ctx) => {
-						// @ts-expect-error
-						const isReadingMode = ctx.containerEl.hasClass('markdown-preview-section') || ctx.containerEl.hasClass('markdown-preview-view');
-						// this seems to indicate whether we are in the pdf export mode
-						// sadly there is no section info in this mode
-						// thus we can't check if the codeblock is at the start of the note and thus frontmatter
-						// const isPdfExport = ctx.displayMode === true;
-
-						// this is so that we leave the hidden frontmatter code block in reading mode alone
-						if (language === 'yaml' && isReadingMode && ctx.frontmatter) {
-							const sectionInfo = ctx.getSectionInfo(el);
-
-							if (sectionInfo && sectionInfo.lineStart === 0) {
-								return;
-							}
+						// we need to avoid making the hidden frontmatter code block visible
+						if (el.parentElement?.classList.contains('mod-frontmatter')) {
+							return;
 						}
 
 						const codeBlock = new CodeBlock(this, el, source, language, ctx);
@@ -119,20 +123,13 @@ export default class ShikiPlugin extends Plugin {
 			const inlineCodes = el.findAll(':not(pre) > code');
 			for (let codeElm of inlineCodes) {
 				let match = codeElm.textContent?.match(SHIKI_INLINE_REGEX); // format: `{lang} code`
-				if (match) {
-					const highlight = await this.highlighter.getHighlightTokens(match[2], match[1]);
-					const tokens = highlight?.tokens.flat(1);
-					if (!tokens?.length) {
-						continue;
-					}
-
-					codeElm.empty();
-					codeElm.addClass('shiki-inline');
-
-					for (let token of tokens) {
-						this.highlighter.tokenToSpan(token, codeElm);
-					}
+				if (!match) {
+					continue;
 				}
+
+				const codeBlock = new InlineCodeBlock(this, codeElm, match[2], match[1], ctx);
+
+				ctx.addChild(codeBlock);
 			}
 		});
 	}
@@ -141,7 +138,7 @@ export default class ShikiPlugin extends Plugin {
 		this.highlighter.unload();
 	}
 
-	addActiveCodeBlock(codeBlock: CodeBlock): void {
+	addActiveCodeBlock(codeBlock: CodeBlock | InlineCodeBlock): void {
 		const filePath = codeBlock.ctx.sourcePath;
 
 		if (!this.activeCodeBlocks.has(filePath)) {
@@ -151,7 +148,7 @@ export default class ShikiPlugin extends Plugin {
 		}
 	}
 
-	removeActiveCodeBlock(codeBlock: CodeBlock): void {
+	removeActiveCodeBlock(codeBlock: CodeBlock | InlineCodeBlock): void {
 		const filePath = codeBlock.ctx.sourcePath;
 
 		if (this.activeCodeBlocks.has(filePath)) {
@@ -164,6 +161,13 @@ export default class ShikiPlugin extends Plugin {
 
 	async loadSettings(): Promise<void> {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData()) as Settings;
+
+		// migrate the theme to darkTheme and lightTheme
+		if (this.settings.theme !== undefined) {
+			this.settings.darkTheme = this.settings.theme;
+			this.settings.lightTheme = this.settings.theme;
+			this.settings.theme = undefined;
+		}
 	}
 
 	async saveSettings(): Promise<void> {
