@@ -1,11 +1,15 @@
-import { loadPrism, Plugin, TFile, type MarkdownPostProcessor } from 'obsidian';
-import { CodeBlock } from 'src/CodeBlock';
-import { createCm6Plugin } from 'src/codemirror/Cm6_ViewPlugin';
-import { DEFAULT_SETTINGS, type Settings } from 'src/settings/Settings';
-import { ShikiSettingsTab } from 'src/settings/SettingsTab';
-import { filterHighlightAllPlugin } from 'src/PrismPlugin';
-import { CodeHighlighter } from 'src/Highlighter';
-import { InlineCodeBlock } from 'src/InlineCodeBlock';
+import { debounce, loadPrism, Plugin, TFile, type MarkdownPostProcessor } from 'obsidian';
+import { CodeBlock } from 'packages/obsidian/src/CodeBlock';
+import { createCm6Plugin } from 'packages/obsidian/src/codemirror/Cm6_ViewPlugin';
+import { DEFAULT_SETTINGS, type Settings } from 'packages/obsidian/src/settings/Settings';
+import { ShikiSettingsTab } from 'packages/obsidian/src/settings/SettingsTab';
+import { filterHighlightAllPlugin, type PrismWithFilterHighlightAll } from 'packages/obsidian/src/PrismPlugin';
+import { CodeHighlighter } from 'packages/obsidian/src/Highlighter';
+import { InlineCodeBlock } from 'packages/obsidian/src/InlineCodeBlock';
+
+import 'packages/obsidian/src/styles.css';
+import 'virtual:ec-styles.css';
+import 'virtual:ec-runtime';
 
 export const SHIKI_INLINE_REGEX = /^\{([^\s]+)\} (.*)/i; // format: `{lang} code`
 
@@ -50,9 +54,17 @@ export default class ShikiPlugin extends Plugin {
 			}),
 		);
 
+		const debouncedReload = debounce(
+			() => {
+				void this.reloadHighlighter();
+			},
+			500,
+			true,
+		);
+
 		this.registerEvent(
 			this.app.workspace.on('css-change', () => {
-				void this.reloadHighlighter();
+				debouncedReload();
 			}),
 		);
 
@@ -84,13 +96,9 @@ export default class ShikiPlugin extends Plugin {
 	}
 
 	async registerPrismPlugin(): Promise<void> {
-		/* eslint-disable */
-
-		await loadPrism();
-
-		const prism = await loadPrism();
-		filterHighlightAllPlugin(prism);
-		prism.plugins.filterHighlightAll.reject.addSelector('div.expressive-code pre code');
+		const prism = (await loadPrism()) as PrismWithFilterHighlightAll;
+		const filterHighlightAll = filterHighlightAllPlugin(prism);
+		filterHighlightAll?.reject.addSelector('div.expressive-code pre code');
 	}
 
 	registerCodeBlockProcessors(): void {
@@ -121,8 +129,8 @@ export default class ShikiPlugin extends Plugin {
 	registerInlineCodeProcessor(): void {
 		this.registerMarkdownPostProcessor(async (el, ctx) => {
 			const inlineCodes = el.findAll(':not(pre) > code');
-			for (let codeElm of inlineCodes) {
-				let match = codeElm.textContent?.match(SHIKI_INLINE_REGEX); // format: `{lang} code`
+			for (const codeElm of inlineCodes) {
+				const match = SHIKI_INLINE_REGEX.exec(codeElm.textContent ?? ''); // format: `{lang} code`
 				if (!match) {
 					continue;
 				}
@@ -135,7 +143,7 @@ export default class ShikiPlugin extends Plugin {
 	}
 
 	onunload(): void {
-		this.highlighter.unload();
+		void this.highlighter.unload();
 	}
 
 	addActiveCodeBlock(codeBlock: CodeBlock | InlineCodeBlock): void {

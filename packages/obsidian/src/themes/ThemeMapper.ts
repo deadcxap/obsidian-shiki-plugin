@@ -1,7 +1,7 @@
 import { type BundledTheme, bundledThemes, type ThemeRegistration } from 'shiki';
 import type * as hast_types from 'hast';
-import { OBSIDIAN_THEME } from 'src/themes/ObsidianTheme';
-import type ShikiPlugin from 'src/main';
+import { OBSIDIAN_THEME } from 'packages/ec-core/src/ObsidianTheme';
+import type ShikiPlugin from 'packages/obsidian/src/main';
 
 export const OBSIDIAN_THEME_IDENTIFIER = 'obsidian-theme';
 
@@ -60,10 +60,10 @@ export class ThemeMapper {
 	}
 
 	getThemeIdentifier(): string {
-		if (document.body.classList.contains('theme-light')) {
-			return this.plugin.loadedSettings.lightTheme;
-		} else {
+		if (this.plugin.app.isDarkMode()) {
 			return this.plugin.loadedSettings.darkTheme;
+		} else {
+			return this.plugin.loadedSettings.lightTheme;
 		}
 	}
 
